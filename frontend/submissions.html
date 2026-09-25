@@ -20,21 +20,26 @@
           <option value="0">全部提交</option>
           <option value="1">只看我的</option>
         </select>
+        <button class="btn btn-outline" id="compareBtn" onclick="compareSelected()">⚖️ 对比 (<span id="compareCount">0</span>/2)</button>
         <button class="btn btn-outline" onclick="load()">🔄 刷新</button>
       </div>
     </div>
 
     <div class="card">
+      <div class="card-title">提交列表
+        <span class="hint">勾选同一道题的两条提交后点击「对比」，可并排查看差异</span>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th class="cmp-pick-col"></th>
               <th>提交时间</th><th>用户</th><th>题目</th><th>语言</th>
               <th class="text-center">结果</th><th class="text-center">得分</th>
               <th class="text-center">时间</th><th class="text-center">内存</th><th></th>
             </tr>
           </thead>
-          <tbody id="list"><tr><td colspan="9" class="empty"><span class="spinner"></span> 加载中…</td></tr></tbody>
+          <tbody id="list"><tr><td colspan="10" class="empty"><span class="spinner"></span> 加载中…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -44,6 +49,8 @@
   <script>
     OJ.boot("submissions");
     let problemNames = {};
+    let rowCache = {};          // sub_id -> 列表行数据（用于跨题预校验）
+    const selected = new Map(); // sub_id -> problem_id（保持选择顺序）
 
     async function load() {
       const mine = OJ.el("mineFilter").value === "1";
@@ -55,9 +62,22 @@
         const data = await OJ.api("/submissions?" + params.toString());
         // 批量拉取题目名
         await loadProblemNames(data.items);
-        if (!data.items.length) { tbody.innerHTML = `<tr><td colspan="9" class="empty">暂无提交记录</td></tr>`; return; }
+        rowCache = {};
+        data.items.forEach(s => { rowCache[s.id] = s; });
+        // 刷新后清理已不在列表中的勾选项
+        for (const id of [...selected.keys()]) {
+          if (!rowCache[id]) selected.delete(id);
+        }
+        if (!data.items.length) {
+          tbody.innerHTML = `<tr><td colspan="10" class="empty">暂无提交记录</td></tr>`;
+          updateCompareBtn();
+          return;
+        }
         tbody.innerHTML = data.items.map(s => `
           <tr>
+            <td class="cmp-pick-col text-center"><input type="checkbox" class="cmp-check"
+              data-id="${OJ.esc(s.id)}" data-problem="${OJ.esc(s.problem_id)}"
+              ${selected.has(s.id) ? "checked" : ""} onchange="onPick(this)"></td>
             <td class="mono muted">${OJ.fmtTime(s.created_at)}</td>
             <td>${OJ.esc(s.nickname || s.username)}</td>
             <td>${OJ.esc(problemNames[s.problem_id] || s.problem_id)}</td>
@@ -68,10 +88,55 @@
             <td class="text-center mono">${OJ.fmtMem(s.memory_kb)}</td>
             <td class="text-right"><button class="btn btn-outline btn-sm" onclick="viewDetail('${OJ.esc(s.id)}')">详情</button></td>
           </tr>`).join("");
+        updateCompareBtn();
       } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="9" class="empty">${OJ.esc(e.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" class="empty">${OJ.esc(e.message)}</td></tr>`;
       }
     }
+
+    function onPick(cb) {
+      const id = cb.getAttribute("data-id");
+      if (cb.checked) {
+        if (selected.size >= 2) {
+          cb.checked = false;
+          OJ.toast("最多选择两条提交进行对比", "error");
+          return;
+        }
+        selected.set(id, cb.getAttribute("data-problem"));
+      } else {
+        selected.delete(id);
+      }
+      updateCompareBtn();
+    }
+
+    function updateCompareBtn() {
+      const btn = OJ.el("compareBtn");
+      OJ.el("compareCount").textContent = selected.size;
+      btn.disabled = selected.size !== 2;
+    }
+
+    async function compareSelected() {
+      if (selected.size !== 2) {
+        OJ.toast("请先勾选两条提交", "error");
+        return;
+      }
+      const [idA, idB] = [...selected.keys()];
+      // 前端先做一次同题预校验，给出即时提示（以后端校验为准）
+      const [pa, pb] = [selected.get(idA), selected.get(idB)];
+      if (pa !== pb) {
+        OJ.toast("这两条提交不属于同一道题，无法对比", "error");
+        return;
+      }
+      let data;
+      try {
+        data = await OJ.api(`/submissions/compare?a=${encodeURIComponent(idA)}&b=${encodeURIComponent(idB)}`);
+      } catch (e) {
+        OJ.toast(e.message, "error");
+        return;
+      }
+      showCompare(data);
+    }
+
 
     async function loadProblemNames(items) {
       const ids = [...new Set(items.map(s => s.problem_id))];
@@ -107,6 +172,135 @@
           <pre class="code">${OJ.esc(s.code || "")}</pre>`;
         OJ.openModal("提交 " + id, body).querySelector(".modal").style.maxWidth = "860px";
       } catch (e) { OJ.toast(e.message, "error"); }
+    }
+
+    // ---- 提交对比 ----
+    function cmpHead(s, side, state) {
+      const tag = state === "compile_error"
+        ? `<span class="cmp-tag cmp-tag-ce">编译失败</span>`
+        : state === "pending"
+          ? `<span class="cmp-tag">评测中</span>` : "";
+      return `<div class="cmp-col-head cmp-side-${side}">
+        <span class="cmp-side-badge">${side === "a" ? "A" : "B"}</span>
+        ${OJ.verdictBadge(s.status)} ${tag}
+        <div class="cmp-sub muted mono">${OJ.esc(s.id)} · ${OJ.esc(s.language)} · ${OJ.fmtTime(s.created_at)}</div>
+        <div class="cmp-sub muted">${OJ.esc(s.nickname || s.username || "")}</div>
+      </div>`;
+    }
+
+    function cmpSummary(c) {
+      const chips = [];
+      const sc = c.metrics.score;
+      if (sc.comparable && sc.winner) {
+        const v = Math.abs(sc.delta);
+        chips.push(`<span class="cmp-chip cmp-win-side-${sc.winner}">${sc.winner === "a" ? "A" : "B"} 得分更高 +${v}</span>`);
+      }
+      const tm = c.metrics.time_ms;
+      if (tm.comparable && tm.winner) {
+        chips.push(`<span class="cmp-chip cmp-win-side-${tm.winner}">${tm.winner === "a" ? "A" : "B"} 更快（省 ${OJ.fmtDuration(Math.abs(tm.delta))}）</span>`);
+      }
+      const mm = c.metrics.memory_kb;
+      if (mm.comparable && mm.winner) {
+        chips.push(`<span class="cmp-chip cmp-win-side-${mm.winner}">${mm.winner === "a" ? "A" : "B"} 更省内存（省 ${OJ.fmtMem(Math.abs(mm.delta))}）</span>`);
+      }
+      if (c.state.a === "compile_error" || c.state.b === "compile_error") {
+        const ceSide = c.state.a === "compile_error" && c.state.b === "compile_error"
+          ? "A、B 均编译失败"
+          : (c.state.a === "compile_error" ? "A" : "B") + " 编译失败";
+        chips.push(`<span class="cmp-chip cmp-chip-ce">${ceSide}</span>`);
+      }
+      if (c.metrics.status.diff) {
+        chips.push(`<span class="cmp-chip cmp-chip-diff">判定结果不同</span>`);
+      }
+      if (!chips.length) {
+        chips.push(`<span class="cmp-chip">两次提交的判定结果与指标基本一致</span>`);
+      }
+      return `<div class="cmp-summary">${chips.join("")}</div>`;
+    }
+
+    function cmpMetricRow(label, c, key, fmt) {
+      const m = c.metrics[key];
+      const winCls = (side) => m.winner === side ? "cmp-better" : "";
+      const winnerMark = (side) => m.winner === side
+        ? ` <span class="cmp-mark" title="该项更优">▲</span>` : "";
+      const val = (side) => {
+        const raw = m[side];
+        return raw === null || raw === undefined ? "-" : fmt(raw);
+      };
+      return `<tr>
+        <td class="cmp-row-label">${label}</td>
+        <td class="text-center mono ${winCls("a")}${m.diff ? " cmp-diff-cell" : ""}">${val("a")}${winnerMark("a")}</td>
+        <td class="text-center mono ${winCls("b")}${m.diff ? " cmp-diff-cell" : ""}">${val("b")}${winnerMark("b")}</td>
+      </tr>`;
+    }
+
+    function cmpCases(c) {
+      if (!c.cases.length) return "";
+      const rows = c.cases.map(r => {
+        const cell = (side) => {
+          const d = r[side];
+          if (!d) return `<td colspan="3" class="text-center muted cmp-na">— 无此测试点 —</td>`;
+          const tw = r.time_winner === side ? "cmp-better" : "";
+          const mw = r.memory_winner === side ? "cmp-better" : "";
+          const sd = r.status_diff ? "cmp-status-diff" : "";
+          return `<td class="text-center ${sd}">${OJ.verdictBadge(d.status)}</td>
+                  <td class="text-center mono ${tw}">${OJ.fmtDuration(d.time_ms)}</td>
+                  <td class="text-center mono ${mw}">${OJ.fmtMem(d.memory_kb)}</td>`;
+        };
+        return `<tr>
+          <td class="mono muted">#${OJ.esc(r.case_id)}</td>
+          ${cell("a")}${cell("b")}
+        </tr>`;
+      }).join("");
+      return `<label class="mt-16">测试点明细</label>
+        <div class="table-wrap cmp-case-wrap"><table>
+          <thead><tr>
+            <th rowspan="2">测试点</th>
+            <th class="text-center cmp-th-a" colspan="3">A</th>
+            <th class="text-center cmp-th-b" colspan="3">B</th>
+          </tr><tr>
+            <th class="text-center">结果</th><th class="text-center">时间</th><th class="text-center">内存</th>
+            <th class="text-center">结果</th><th class="text-center">时间</th><th class="text-center">内存</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+    }
+
+    function cmpCompile(c) {
+      if (!c.compile.show) return "";
+      const col = (side) => {
+        const msg = c.compile[side];
+        return `<div class="cmp-col">
+          <div class="muted cmp-compile-head">${side === "a" ? "A" : "B"} 编译信息${msg ? "" : "（无）"}</div>
+          ${msg ? `<pre class="code">${OJ.esc(msg)}</pre>` : `<pre class="code light cmp-empty-pre">—</pre>`}
+        </div>`;
+      };
+      return `<label class="mt-16">编译信息${c.compile.diff ? ` <span class="cmp-tag cmp-tag-ce">不一致</span>` : ""}</label>
+        <div class="cmp-grid-2">${col("a")}${col("b")}</div>`;
+    }
+
+    function showCompare(c) {
+      const title = "提交对比 · " + (problemNames[c.problem_id] || c.problem_id || "");
+      const body = `
+        ${cmpSummary(c)}
+        <div class="cmp-grid">
+          ${cmpHead(c.a, "a", c.state.a)}
+          ${cmpHead(c.b, "b", c.state.b)}
+        </div>
+        <div class="table-wrap mt-8"><table class="cmp-metrics">
+          <thead><tr><th>指标</th><th class="text-center cmp-th-a">A</th><th class="text-center cmp-th-b">B</th></tr></thead>
+          <tbody>
+            ${cmpMetricRow("结果", c, "status", (v) => OJ.verdictBadge(v))}
+            ${cmpMetricRow("得分", c, "score", (v) => v)}
+            ${cmpMetricRow("耗时", c, "time_ms", OJ.fmtDuration)}
+            ${cmpMetricRow("内存", c, "memory_kb", OJ.fmtMem)}
+            ${cmpMetricRow("语言", c, "language", OJ.esc)}
+            ${cmpMetricRow("提交时间", c, "created_at", OJ.fmtTime)}
+          </tbody>
+        </table></div>
+        ${cmpCompile(c)}
+        ${cmpCases(c)}`;
+      OJ.openModal(title, body).querySelector(".modal").style.maxWidth = "960px";
     }
 
     load();

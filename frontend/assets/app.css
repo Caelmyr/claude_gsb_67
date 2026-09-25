@@ -276,3 +276,60 @@ code.inline { font-family: var(--mono); background: var(--surface-2); padding: 1
 .flex { display: flex; } .flex-between { display: flex; justify-content: space-between; align-items: center; }
 .gap-8 { gap: 8px; } .gap-12 { gap: 12px; } .wrap { flex-wrap: wrap; }
 .ml-auto { margin-left: auto; }
+
+/* ---------- 提交对比 ---------- */
+.cmp-pick-col { width: 38px; }
+.cmp-pick-col input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; }
+
+.cmp-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.cmp-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
+}
+.cmp-chip.cmp-win-side-a { background: var(--primary-50); border-color: var(--primary); color: var(--primary); }
+.cmp-chip.cmp-win-side-b { background: var(--green-bg); border-color: var(--green); color: var(--green); }
+.cmp-chip.cmp-chip-ce { background: var(--red-bg); border-color: var(--red); color: var(--red); }
+.cmp-chip.cmp-chip-diff { background: var(--yellow-bg); border-color: var(--yellow); color: var(--yellow); }
+
+.cmp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cmp-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .cmp-grid, .cmp-grid-2 { grid-template-columns: 1fr; } }
+
+.cmp-col-head {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; background: var(--surface-2);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.cmp-side-a { border-left: 3px solid var(--primary); }
+.cmp-side-b { border-left: 3px solid var(--green); }
+.cmp-side-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%; font-size: 12px; font-weight: 800; color: #fff;
+}
+.cmp-side-a .cmp-side-badge { background: var(--primary); }
+.cmp-side-b .cmp-side-badge { background: var(--green); }
+.cmp-sub { width: 100%; font-size: 12px; }
+
+.cmp-metrics .cmp-th-a { color: var(--primary); }
+.cmp-metrics .cmp-th-b { color: var(--green); }
+.cmp-row-label { font-weight: 600; color: var(--text-muted); font-size: 13px; }
+.cmp-diff-cell { background: var(--yellow-bg) !important; }
+.cmp-better { color: var(--green); font-weight: 700; background: var(--green-bg); }
+.cmp-mark { font-size: 10px; }
+
+.cmp-tag {
+  display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 8px;
+  border-radius: 20px; background: var(--surface); border: 1px solid var(--border); color: var(--text-muted);
+}
+.cmp-tag-ce { background: var(--red-bg); border-color: var(--red); color: var(--red); }
+
+.cmp-compile-head { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.cmp-empty-pre { color: var(--text-muted); text-align: center; padding: 14px; }
+
+.cmp-case-wrap { margin-top: 8px; }
+.cmp-case-wrap .cmp-th-a { background: var(--primary-50); color: var(--primary); }
+.cmp-case-wrap .cmp-th-b { background: var(--green-bg); color: var(--green); }
+.cmp-status-diff { background: var(--yellow-bg); }
+.cmp-na { font-size: 12px; }
+

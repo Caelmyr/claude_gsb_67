@@ -6,6 +6,7 @@ from flask import Blueprint, request
 from backend import config
 from backend.api import ok, err, require_auth, require_admin
 from backend.judge import engine
+from backend.judge.compare import compare_submissions
 from backend.judge.ranking import contest_status
 from backend.storage import read_json
 from backend.utils import clamp, user_key
@@ -82,6 +83,38 @@ def get_submission(sub_id):
     if not is_owner and not is_admin:
         return err("无权查看该提交", 403)
     return ok(sub)
+
+
+@submissions_bp.get("/submissions/compare")
+@require_auth
+def compare_submissions_view():
+    """并排对比同一道题的两条提交。"""
+    a_id = (request.args.get("a") or "").strip()
+    b_id = (request.args.get("b") or "").strip()
+    if not a_id or not b_id:
+        return err("请选择两条要对比的提交", 400)
+    if a_id == b_id:
+        return err("请选择两条不同的提交进行对比", 400)
+
+    a_sub = engine.get_submission(a_id, include_code=False)
+    b_sub = engine.get_submission(b_id, include_code=False)
+    missing = []
+    if not a_sub:
+        missing.append("第一条提交")
+    if not b_sub:
+        missing.append("第二条提交")
+    if missing:
+        return err("、".join(missing) + "不存在或已被删除", 404)
+
+    is_admin = request.user.get("role") == "admin"
+    for sub, label in ((a_sub, "第一条"), (b_sub, "第二条")):
+        if not is_admin and sub.get("user_id") != request.user["id"]:
+            return err(f"{label}提交无权查看", 403)
+
+    if a_sub.get("problem_id") != b_sub.get("problem_id"):
+        return err("两条提交不属于同一道题，无法对比，请重新选择", 400)
+
+    return ok(compare_submissions(a_sub, b_sub))
 
 
 @submissions_bp.post("/submissions/<sub_id>/rejudge")

@@ -13,7 +13,7 @@
     <div class="page-head">
       <div>
         <h1>📝 提交记录与评测结果</h1>
-        <div class="sub">查看所有提交的评测结果，点击查看详情</div>
+        <div class="sub">查看所有提交的评测结果，勾选同一道题的两条提交可并排对比</div>
       </div>
       <div class="flex gap-8">
         <select id="mineFilter" style="width:auto" onchange="load()">
@@ -24,17 +24,28 @@
       </div>
     </div>
 
+    <div id="compareBar" class="compare-bar hidden">
+      <div class="cmp-bar-info">
+        已选择 <b id="cmpCount">0</b> / 2 条提交<span id="cmpProblem" class="muted"></span>
+      </div>
+      <div class="flex gap-8">
+        <button id="cmpBtn" class="btn btn-primary btn-sm" onclick="compareSelected()">📊 对比选中提交</button>
+        <button class="btn btn-outline btn-sm" onclick="clearSelection()">清空选择</button>
+      </div>
+    </div>
+
     <div class="card">
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th class="text-center cmp-col-pick"></th>
               <th>提交时间</th><th>用户</th><th>题目</th><th>语言</th>
               <th class="text-center">结果</th><th class="text-center">得分</th>
               <th class="text-center">时间</th><th class="text-center">内存</th><th></th>
             </tr>
           </thead>
-          <tbody id="list"><tr><td colspan="9" class="empty"><span class="spinner"></span> 加载中…</td></tr></tbody>
+          <tbody id="list"><tr><td colspan="10" class="empty"><span class="spinner"></span> 加载中…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -44,6 +55,8 @@
   <script>
     OJ.boot("submissions");
     let problemNames = {};
+    // 勾选的提交：id -> {id, problem_id}，跨自动刷新保留
+    const picked = new Map();
 
     async function load() {
       const mine = OJ.el("mineFilter").value === "1";
@@ -55,9 +68,15 @@
         const data = await OJ.api("/submissions?" + params.toString());
         // 批量拉取题目名
         await loadProblemNames(data.items);
-        if (!data.items.length) { tbody.innerHTML = `<tr><td colspan="9" class="empty">暂无提交记录</td></tr>`; return; }
+        if (!data.items.length) {
+          tbody.innerHTML = `<tr><td colspan="10" class="empty">暂无提交记录</td></tr>`;
+          return;
+        }
         tbody.innerHTML = data.items.map(s => `
           <tr>
+            <td class="text-center cmp-col-pick"><input type="checkbox" class="cmp-check"
+              data-id="${OJ.esc(s.id)}" data-pid="${OJ.esc(s.problem_id)}"
+              ${picked.has(s.id) ? "checked" : ""} title="勾选以加入对比（最多 2 条，且需为同一道题）"></td>
             <td class="mono muted">${OJ.fmtTime(s.created_at)}</td>
             <td>${OJ.esc(s.nickname || s.username)}</td>
             <td>${OJ.esc(problemNames[s.problem_id] || s.problem_id)}</td>
@@ -69,8 +88,50 @@
             <td class="text-right"><button class="btn btn-outline btn-sm" onclick="viewDetail('${OJ.esc(s.id)}')">详情</button></td>
           </tr>`).join("");
       } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="9" class="empty">${OJ.esc(e.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" class="empty">${OJ.esc(e.message)}</td></tr>`;
       }
+      refreshBar();
+    }
+
+    // 勾选交互（事件委托，刷新后重新绑定也只需一次）
+    document.addEventListener("change", (e) => {
+      const box = e.target.closest && e.target.closest(".cmp-check");
+      if (!box) return;
+      const id = box.dataset.id;
+      const pid = box.dataset.pid;
+      if (!box.checked) {
+        picked.delete(id);
+      } else if (picked.size >= 2) {
+        box.checked = false;
+        OJ.toast("最多选择 2 条提交进行对比", "error");
+        return;
+      } else if (picked.size === 1) {
+        const other = picked.values().next().value;
+        if (other.problem_id !== pid) {
+          box.checked = false;
+          OJ.toast("只能对比同一道题的两条提交（当前已选题目：" +
+            (problemNames[other.problem_id] || other.problem_id) + "）", "error");
+          return;
+        }
+      }
+      if (box.checked) picked.set(id, { id, problem_id: pid });
+      refreshBar();
+    });
+
+    function clearSelection() {
+      picked.clear();
+      document.querySelectorAll(".cmp-check").forEach(b => { b.checked = false; });
+      refreshBar();
+    }
+
+    function refreshBar() {
+      const bar = OJ.el("compareBar");
+      OJ.el("cmpCount").textContent = String(picked.size);
+      const pids = [...new Set([...picked.values()].map(p => p.problem_id))];
+      OJ.el("cmpProblem").textContent = pids.length
+        ? " · " + (problemNames[pids[0]] || pids[0]) : "";
+      OJ.el("cmpBtn").disabled = picked.size !== 2;
+      bar.classList.toggle("hidden", picked.size === 0);
     }
 
     async function loadProblemNames(items) {
@@ -79,6 +140,203 @@
         try { const p = await OJ.api("/problems/" + id); problemNames[id] = p.title; }
         catch (e) { problemNames[id] = id; }
       }));
+    }
+
+    /* ---------------- 并排对比 ---------------- */
+
+    function signedFmt(delta, kind) {
+      if (delta === null || delta === undefined) return "";
+      const sign = delta > 0 ? "+" : delta < 0 ? "−" : "";
+      const v = Math.abs(delta);
+      if (kind === "ms") {
+        if (v >= 60000) return sign + (v / 60000).toFixed(2) + " min";
+        if (v >= 1000) return sign + (v / 1000).toFixed(2) + " s";
+        return sign + Math.round(v) + " ms";
+      }
+      if (kind === "kb") {
+        if (v >= 1024) return sign + (v / 1024).toFixed(2) + " MB";
+        return sign + Math.round(v) + " KB";
+      }
+      return sign + (Number.isInteger(v) ? String(v) : v.toFixed(1));
+    }
+
+    function metricCell(side, metric, fmtFn, kind) {
+      // side: 0 = A, 1 = B；后端 winner 用 "a"/"b" 表示
+      const v = metric.values[side];
+      const sideName = side === 0 ? "a" : "b";
+      let cls = "";
+      if (metric.winner === "a" || metric.winner === "b") {
+        cls = metric.winner === sideName ? "cmp-win" : "cmp-lose";
+      }
+      const valTxt = (v === null || v === undefined)
+        ? `<span class="muted">-</span>` : OJ.esc(fmtFn(v));
+      let deltaTxt = "";
+      if (cls && metric.winner !== "tie" && metric.delta !== null && metric.delta !== undefined) {
+        // delta 是 A 相对 B 的差值；B 侧展示反号
+        const shown = side === 0 ? metric.delta : -metric.delta;
+        deltaTxt = `<div class="cmp-delta">${OJ.esc(signedFmt(shown, kind))}</div>`;
+      }
+      return `<td class="text-center mono ${cls}">${valTxt}${deltaTxt}</td>`;
+    }
+
+    function statusCellClass(side, relation) {
+      if (relation === "pending") return "";
+      if (relation === "better") return side === 0 ? "cmp-win" : "cmp-lose";
+      if (relation === "worse") return side === 0 ? "cmp-lose" : "cmp-win";
+      if (relation === "both_fail") return "cmp-diff";
+      return "";
+    }
+
+    function summaryChips(d) {
+      const chips = [];
+      const rel = d.verdict.relation;
+      if (rel === "better" || rel === "worse") {
+        const winSide = rel === "better" ? "提交 A" : "提交 B";
+        chips.push(`<span class="cmp-chip cmp-chip-win">判定更优：${winSide}（${OJ.esc(d.a.status)} vs ${OJ.esc(d.b.status)}）</span>`);
+      } else if (rel === "same") {
+        chips.push(`<span class="cmp-chip">判定相同（${OJ.esc(d.a.status)}）</span>`);
+      } else if (rel === "both_fail") {
+        chips.push(`<span class="cmp-chip cmp-chip-warn">两次都未通过（${OJ.esc(d.a.status)} / ${OJ.esc(d.b.status)}）</span>`);
+      } else if (d.verdict.pending) {
+        chips.push(`<span class="cmp-chip cmp-chip-warn">有提交尚未评测完成，结果仅供参考</span>`);
+      }
+      [["time_ms", "ms", "更快", true], ["memory_kb", "kb", "更省内存", true],
+       ["score", "score", "得分更高", false]].forEach(([key, kind, word, lowerBetter]) => {
+        const m = d.metrics[key];
+        if (m.winner === "a" || m.winner === "b") {
+          const name = m.winner === "a" ? "A" : "B";
+          // 更优侧的“优势量”：耗时/内存越小越优，得分越大越优，方向相反
+          let adv;
+          if (m.winner === "a") adv = lowerBetter ? -m.delta : m.delta;
+          else adv = lowerBetter ? m.delta : -m.delta;
+          // 优势量始终展示为正数（更快/更省/更高多少）
+          const advTxt = signedFmt(Math.abs(adv), kind).replace(/^[+−]/, "");
+          chips.push(`<span class="cmp-chip cmp-chip-win">${name} ${word} ${OJ.esc(advTxt)}</span>`);
+        }
+      });
+      if (d.identical) chips.push(`<span class="cmp-chip">两次提交的指标完全一致</span>`);
+      return chips.join(" ");
+    }
+
+    function caseRowHtml(row) {
+      const statusClsA = statusCellClass(0, row.relation);
+      const statusClsB = statusCellClass(1, row.relation);
+      const badge = (d, cls) => d
+        ? `<span class="${cls}">${OJ.verdictBadge(d.status)}</span>`
+        : `<span class="muted">无</span>`;
+      return `
+        <tr class="${row.differs ? "cmp-row-diff" : ""}">
+          <td class="mono">#${OJ.esc(row.case_id)}</td>
+          <td class="text-center ${statusClsA}">${badge(row.a, statusClsA)}</td>
+          ${metricCell(0, row.time, OJ.fmtDuration, "ms")}
+          ${metricCell(0, row.memory, OJ.fmtMem, "kb")}
+          <td class="text-center ${statusClsB}">${badge(row.b, statusClsB)}</td>
+          ${metricCell(1, row.time, OJ.fmtDuration, "ms")}
+          ${metricCell(1, row.memory, OJ.fmtMem, "kb")}
+        </tr>`;
+    }
+
+    async function compareSelected() {
+      const ids = [...picked.keys()];
+      if (ids.length !== 2) { OJ.toast("请勾选两条提交", "error"); return; }
+      let d;
+      try {
+        d = await OJ.api(`/submissions/compare?a=${encodeURIComponent(ids[0])}&b=${encodeURIComponent(ids[1])}`);
+      } catch (e) { OJ.toast(e.message, "error"); return; }
+
+      const problemName = problemNames[d.problem_id] || d.problem_id;
+      const rel = d.verdict.relation;
+      const headClsA = statusCellClass(0, rel);
+      const headClsB = statusCellClass(1, rel);
+      const sideHead = (s, cls, tag) => `
+        <div class="cmp-side-head ${cls}">
+          <div class="cmp-tag">${tag}</div>
+          <div class="mono cmp-sub-id">${OJ.esc(s.id)}</div>
+          <div class="muted">${OJ.fmtTime(s.created_at)}</div>
+          <div>${OJ.verdictBadge(s.status)}</div>
+        </div>`;
+
+      const metricRow = (label, key, fmtFn, kind) => `
+        <tr>
+          <th class="cmp-row-label">${label}</th>
+          ${metricCell(0, d.metrics[key], fmtFn, kind)}
+          ${metricCell(1, d.metrics[key], fmtFn, kind)}
+        </tr>`;
+
+      const langCls = d.diff_fields.includes("language") ? "cmp-diff" : "";
+      const textCell = (v, cls) =>
+        `<td class="text-center mono ${cls || ""}">${v === "" || v === null || v === undefined
+          ? `<span class="muted">-</span>` : OJ.esc(v)}</td>`;
+
+      let casesBlock;
+      if (d.case_total === 0) {
+        casesBlock = `<p class="empty" style="padding:20px">两次提交都没有测试点明细（可能编译失败或评测未完成）</p>`;
+      } else {
+        casesBlock = `
+          <div class="flex-between mb-16">
+            <label style="margin:0">逐测试点对比${d.case_diffs ? `（${d.case_diffs} 个有差异）` : "（完全一致）"}</label>
+            <label class="cmp-toggle"><input type="checkbox" id="cmpOnlyDiff"> 仅看差异</label>
+          </div>
+          <div class="table-wrap"><table class="cmp-cases">
+            <thead><tr>
+              <th rowspan="1">测试点</th>
+              <th class="text-center cmp-th-a" colspan="3">提交 A</th>
+              <th class="text-center cmp-th-b" colspan="3">提交 B</th>
+            </tr><tr>
+              <th></th>
+              <th class="text-center">结果</th><th class="text-center">时间</th><th class="text-center">内存</th>
+              <th class="text-center">结果</th><th class="text-center">时间</th><th class="text-center">内存</th>
+            </tr></thead>
+            <tbody>${d.cases.map(caseRowHtml).join("")}</tbody>
+          </table></div>`;
+      }
+
+      const compileBlock = (d.a.compile_message || d.b.compile_message) ? `
+        <label class="mt-16">编译信息</label>
+        <div class="cmp-compile">
+          <div>
+            <div class="muted cmp-col-cap">提交 A${d.a.status === "CE" ? " · 编译失败" : ""}</div>
+            <pre class="code light cmp-pre">${d.a.compile_message ? OJ.esc(d.a.compile_message) : '<span class="muted">无</span>'}</pre>
+          </div>
+          <div>
+            <div class="muted cmp-col-cap">提交 B${d.b.status === "CE" ? " · 编译失败" : ""}</div>
+            <pre class="code light cmp-pre">${d.b.compile_message ? OJ.esc(d.b.compile_message) : '<span class="muted">无</span>'}</pre>
+          </div>
+        </div>` : "";
+
+      const body = `
+        <div class="cmp-summary">${summaryChips(d)}</div>
+        <div class="table-wrap"><table class="cmp-table">
+          <thead>
+            <tr>
+              <th class="cmp-row-label">题目</th>
+              <th colspan="2" class="text-center">${OJ.esc(problemName)} <span class="muted mono">(${OJ.esc(d.problem_id)})</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="cmp-row-label"></td>
+              <td style="padding:0">${sideHead(d.a, headClsA, "提交 A")}</td>
+              <td style="padding:0">${sideHead(d.b, headClsB, "提交 B")}</td></tr>
+            ${metricRow("得分", "score", (v) => String(v), "score")}
+            ${metricRow("耗时", "time_ms", OJ.fmtDuration, "ms")}
+            ${metricRow("内存", "memory_kb", OJ.fmtMem, "kb")}
+            <tr><th class="cmp-row-label">语言</th>
+              ${textCell(d.a.language, langCls)}${textCell(d.b.language, langCls)}</tr>
+          </tbody>
+        </table></div>
+        <div class="mt-16">${casesBlock}</div>
+        ${compileBlock}`;
+
+      const mask = OJ.openModal("提交对比 · " + problemName, body);
+      mask.querySelector(".modal").style.maxWidth = "980px";
+      const onlyDiff = mask.querySelector("#cmpOnlyDiff");
+      if (onlyDiff) {
+        onlyDiff.addEventListener("change", () => {
+          mask.querySelectorAll(".cmp-cases tbody tr").forEach(tr => {
+            tr.classList.toggle("hidden", onlyDiff.checked && !tr.classList.contains("cmp-row-diff"));
+          });
+        });
+      }
     }
 
     async function viewDetail(id) {
